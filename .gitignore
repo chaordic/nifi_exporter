@@ -3,5 +3,3 @@
 /config.yml
 /nifi_exporter
 /*.tar.gz
-
-my-config.yml
