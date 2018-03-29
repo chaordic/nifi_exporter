@@ -1,11 +1,12 @@
 package collectors
 
 import (
-	"github.com/msiedlarek/nifi_exporter/nifi/client"
+	"github.com/chaordic/nifi_exporter/nifi/client"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
 const rootProcessGroupID = "root"
+const maxDeep = 2;
 
 type ProcessGroupsCollector struct {
 	api *client.Client
@@ -164,15 +165,7 @@ func (c *ProcessGroupsCollector) Describe(ch chan<- *prometheus.Desc) {
 }
 
 func (c *ProcessGroupsCollector) Collect(ch chan<- prometheus.Metric) {
-	entities, err := c.api.GetProcessGroups(rootProcessGroupID)
-	if err != nil {
-		ch <- prometheus.NewInvalidMetric(c.componentCount, err)
-		return
-	}
-
-	for i := range entities {
-		c.collect(ch, &entities[i])
-	}
+	deepCollect(ch, c, rootProcessGroupID, 0)
 }
 
 func (c *ProcessGroupsCollector) collect(ch chan<- prometheus.Metric, entity *client.ProcessGroupEntity) {
@@ -339,5 +332,20 @@ func (c *ProcessGroupsCollector) collect(ch chan<- prometheus.Metric, entity *cl
 			nodeID,
 			snapshot.Name,
 		)
+	}
+}
+
+func deepCollect(ch chan<- prometheus.Metric, c *ProcessGroupsCollector, parent string, deep int) {
+	entities, err := c.api.GetProcessGroups(parent)
+	if err != nil {
+		ch <- prometheus.NewInvalidMetric(c.componentCount, err)
+		return;
+	}
+
+	for i := range entities {
+		c.collect(ch, &entities[i])
+		if deep < maxDeep {
+			deepCollect(ch, c, entities[i].ID, deep + 1)
+		}
 	}
 }
