@@ -1,7 +1,7 @@
 package collectors
 
 import (
-	"strconv"
+	"fmt"
 	"container/list"
 	"github.com/chaordic/nifi_exporter/nifi/client"
 	"github.com/prometheus/client_golang/prometheus"
@@ -194,7 +194,7 @@ func (c *ProcessGroupsCollector) Collect(ch chan<- prometheus.Metric) {
 		item := 1;
 		for e := data[i].Front(); e != nil; e = e.Next() {
 			// Must pass a prefix to avoid repeated metrics
-			c.collect(ch, e.Value.(*client.ProcessGroupEntity),  "[" + strconv.Itoa(level) + "][" + strconv.Itoa(item) + "] - ")
+			c.collect(ch, e.Value.(*client.ProcessGroupEntity), fmt.Sprintf("[%02d][%03d] - ", level, item))
 			item++
 		}
 		level++
