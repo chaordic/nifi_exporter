@@ -1,6 +1,7 @@
 package collectors
 
 import (
+	"strconv"
 	"container/list"
 	"github.com/chaordic/nifi_exporter/nifi/client"
 	"github.com/prometheus/client_golang/prometheus"
@@ -187,15 +188,20 @@ func (c *ProcessGroupsCollector) Collect(ch chan<- prometheus.Metric) {
 	var data = make([]*list.List, c.maxDeep);
 	deepCollect(ch, c, rootProcessGroupID, 0, data)
 
-  // Now we call collect metris level by level
+	// Now we call collect metris level by level
+	level := 1;
 	for i := range data {
+		item := 1;
 		for e := data[i].Front(); e != nil; e = e.Next() {
-			c.collect(ch, e.Value.(*client.ProcessGroupEntity))
+			// Must pass a prefix to avoid repeated metrics
+			c.collect(ch, e.Value.(*client.ProcessGroupEntity),  "[" + strconv.Itoa(level) + "][" + strconv.Itoa(item) + "] - ")
+			item++
 		}
+		level++
 	}
 }
 
-func (c *ProcessGroupsCollector) collect(ch chan<- prometheus.Metric, entity *client.ProcessGroupEntity) {
+func (c *ProcessGroupsCollector) collect(ch chan<- prometheus.Metric, entity *client.ProcessGroupEntity, prefix string) {
 	bulletinCount := map[string]int{
 		"INFO":    0,
 		"WARNING": 0,
@@ -204,12 +210,17 @@ func (c *ProcessGroupsCollector) collect(ch chan<- prometheus.Metric, entity *cl
 	for i := range entity.Bulletins {
 		bulletinCount[entity.Bulletins[i].Bulletin.Level]++
 	}
+
+	// Use this "hack" to avoid duplicated metric errors
+	// since different Nifi Process Groups may have the same name
+	prefixedCompName := 	prefix + entity.Component.Name
+
 	for level, count := range bulletinCount {
 		ch <- prometheus.MustNewConstMetric(
 			c.bulletin5mCount,
 			prometheus.GaugeValue,
 			float64(count),
-			entity.Component.Name,
+			prefixedCompName,
 			level,
 		)
 	}
@@ -228,136 +239,141 @@ func (c *ProcessGroupsCollector) collect(ch chan<- prometheus.Metric, entity *cl
 		c.componentCount,
 		prometheus.GaugeValue,
 		float64(entity.RunningCount),
-		entity.Component.Name,
+		prefixedCompName,
 		"running",
 	)
 	ch <- prometheus.MustNewConstMetric(
 		c.componentCount,
 		prometheus.GaugeValue,
 		float64(entity.StoppedCount),
-		entity.Component.Name,
+		prefixedCompName,
 		"stopped",
 	)
 	ch <- prometheus.MustNewConstMetric(
 		c.componentCount,
 		prometheus.GaugeValue,
 		float64(entity.InvalidCount),
-		entity.Component.Name,
+		prefixedCompName,
 		"invalid",
 	)
 	ch <- prometheus.MustNewConstMetric(
 		c.componentCount,
 		prometheus.GaugeValue,
 		float64(entity.DisabledCount),
-		entity.Component.Name,
+		prefixedCompName,
 		"disabled",
 	)
 
 	for nodeID, snapshot := range nodes {
+
+		// Use this "hack" to avoid duplicated metric errors
+		// since different Nifi Process Groups may have the same name
+		prefixedSnapshotName := prefix + snapshot.Name
+
 		ch <- prometheus.MustNewConstMetric(
 			c.inFlowFiles5mCount,
 			prometheus.GaugeValue,
 			float64(snapshot.FlowFilesIn),
 			nodeID,
-			snapshot.Name,
+			prefixedSnapshotName,
 		)
 		ch <- prometheus.MustNewConstMetric(
 			c.inBytes5mCount,
 			prometheus.GaugeValue,
 			float64(snapshot.BytesIn),
 			nodeID,
-			snapshot.Name,
+			prefixedSnapshotName,
 		)
 		ch <- prometheus.MustNewConstMetric(
 			c.queuedFlowFilesCount,
 			prometheus.GaugeValue,
 			float64(snapshot.FlowFilesQueued),
 			nodeID,
-			snapshot.Name,
+			prefixedSnapshotName,
 		)
 		ch <- prometheus.MustNewConstMetric(
 			c.queuedBytes,
 			prometheus.GaugeValue,
 			float64(snapshot.BytesQueued),
 			nodeID,
-			snapshot.Name,
+			prefixedSnapshotName,
 		)
 		ch <- prometheus.MustNewConstMetric(
 			c.readBytes5mCount,
 			prometheus.GaugeValue,
 			float64(snapshot.BytesRead),
 			nodeID,
-			snapshot.Name,
+			prefixedSnapshotName,
 		)
 		ch <- prometheus.MustNewConstMetric(
 			c.writtenBytes5mCount,
 			prometheus.GaugeValue,
 			float64(snapshot.BytesWritten),
 			nodeID,
-			snapshot.Name,
+			prefixedSnapshotName,
 		)
 		ch <- prometheus.MustNewConstMetric(
 			c.outFlowFiles5mCount,
 			prometheus.GaugeValue,
 			float64(snapshot.FlowFilesOut),
 			nodeID,
-			snapshot.Name,
+			prefixedSnapshotName,
 		)
 		ch <- prometheus.MustNewConstMetric(
 			c.outBytes5mCount,
 			prometheus.GaugeValue,
 			float64(snapshot.BytesOut),
 			nodeID,
-			snapshot.Name,
+			prefixedSnapshotName,
 		)
 		ch <- prometheus.MustNewConstMetric(
 			c.transferredFlowFiles5mCount,
 			prometheus.GaugeValue,
 			float64(snapshot.FlowFilesTransferred),
 			nodeID,
-			snapshot.Name,
+			prefixedSnapshotName,
 		)
 		ch <- prometheus.MustNewConstMetric(
 			c.transferredBytes5mCount,
 			prometheus.GaugeValue,
 			float64(snapshot.BytesTransferred),
 			nodeID,
-			snapshot.Name,
+			prefixedSnapshotName,
 		)
 		ch <- prometheus.MustNewConstMetric(
 			c.receivedBytes5mCount,
 			prometheus.GaugeValue,
 			float64(snapshot.BytesReceived),
 			nodeID,
-			snapshot.Name,
+			prefixedSnapshotName,
 		)
 		ch <- prometheus.MustNewConstMetric(
 			c.receivedFlowFiles5mCount,
 			prometheus.GaugeValue,
 			float64(snapshot.FlowFilesReceived),
 			nodeID,
-			snapshot.Name,
+			prefixedSnapshotName,
 		)
 		ch <- prometheus.MustNewConstMetric(
 			c.sentBytes5mCount,
 			prometheus.GaugeValue,
 			float64(snapshot.BytesSent),
 			nodeID,
-			snapshot.Name,
+			prefixedSnapshotName,
 		)
 		ch <- prometheus.MustNewConstMetric(
 			c.sentFlowFiles5mCount,
 			prometheus.GaugeValue,
 			float64(snapshot.FlowFilesSent),
 			nodeID,
-			snapshot.Name,
+			prefixedSnapshotName,
 		)
 		ch <- prometheus.MustNewConstMetric(
 			c.activeThreadCount,
 			prometheus.GaugeValue,
 			float64(snapshot.ActiveThreadCount),
 			nodeID,
-			snapshot.Name,
+			prefixedSnapshotName,
 		)
 	}
 }
