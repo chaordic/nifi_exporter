@@ -380,7 +380,7 @@ func deepCollect(ch chan<- prometheus.Metric, c *ProcessGroupsCollector, parent 
 			for i := range entities {
 					data[deep].PushBack(&entities[i])
 					// Deel level loop
-					deepCollect(ch, c, entities[i].ID, deep + 1, data)
+					deepCollect(ch, c, entities[i].Component.ID, deep + 1, data)
 			}
 	}
 }
