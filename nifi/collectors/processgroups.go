@@ -1,15 +1,16 @@
 package collectors
 
 import (
+	"container/list"
 	"github.com/chaordic/nifi_exporter/nifi/client"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
 const rootProcessGroupID = "root"
-const maxDeep = 2;
 
 type ProcessGroupsCollector struct {
 	api *client.Client
+	maxDeep int
 
 	bulletin5mCount *prometheus.Desc
 	componentCount  *prometheus.Desc
@@ -31,11 +32,19 @@ type ProcessGroupsCollector struct {
 	activeThreadCount           *prometheus.Desc
 }
 
-func NewProcessGroupsCollector(api *client.Client, labels map[string]string) *ProcessGroupsCollector {
+func NewProcessGroupsCollector(api *client.Client, labels map[string]string, maxDeep int) *ProcessGroupsCollector {
+
+	// Just to avoid overkill configurations
+	if(maxDeep > 5) {
+		maxDeep = 5;
+	}
+
 	prefix := MetricNamePrefix + "pg_"
 	statLabels := []string{"node_id", "group"}
 	return &ProcessGroupsCollector{
 		api: api,
+
+		maxDeep: maxDeep,
 
 		bulletin5mCount: prometheus.NewDesc(
 			prefix+"bulletin_5m_count",
@@ -165,7 +174,25 @@ func (c *ProcessGroupsCollector) Describe(ch chan<- *prometheus.Desc) {
 }
 
 func (c *ProcessGroupsCollector) Collect(ch chan<- prometheus.Metric) {
-	deepCollect(ch, c, rootProcessGroupID, 0)
+	/*
+		 Basic algorithm explanation:
+
+		 We can't collect metrics following the graph
+		 		"root" > "child 1" > "grandchild 1" > "child 2" (error here since we changed one level back) > ...)
+		 To work properly we must collect entities metrics "level by level"
+		 	  "root" > "child 1"..."child n" > "grandchild 1"..."grandchild n" > ...
+	 */
+
+	// First build the graph including all entities
+	var data = make([]*list.List, c.maxDeep);
+	deepCollect(ch, c, rootProcessGroupID, 0, data)
+
+  // Now we call collect metris level by level
+	for i := range data {
+		for e := data[i].Front(); e != nil; e = e.Next() {
+			c.collect(ch, e.Value.(*client.ProcessGroupEntity))
+		}
+	}
 }
 
 func (c *ProcessGroupsCollector) collect(ch chan<- prometheus.Metric, entity *client.ProcessGroupEntity) {
@@ -335,17 +362,25 @@ func (c *ProcessGroupsCollector) collect(ch chan<- prometheus.Metric, entity *cl
 	}
 }
 
-func deepCollect(ch chan<- prometheus.Metric, c *ProcessGroupsCollector, parent string, deep int) {
-	entities, err := c.api.GetProcessGroups(parent)
-	if err != nil {
-		ch <- prometheus.NewInvalidMetric(c.componentCount, err)
-		return;
-	}
-
-	for i := range entities {
-		c.collect(ch, &entities[i])
-		if deep < maxDeep {
-			deepCollect(ch, c, entities[i].ID, deep + 1)
+func deepCollect(ch chan<- prometheus.Metric, c *ProcessGroupsCollector, parent string, deep int, data []*list.List) {
+	// Check stop condition
+	if deep < len(data) {
+		entities, err := c.api.GetProcessGroups(parent)
+		if err != nil {
+			ch <- prometheus.NewInvalidMetric(c.componentCount, err)
+			return;
 		}
+
+			// Deep level list
+			if(data[deep] == nil) {
+				data[deep] = list.New()
+			}
+
+			// Deep level entries
+			for i := range entities {
+					data[deep].PushBack(&entities[i])
+					// Deel level loop
+					deepCollect(ch, c, entities[i].ID, deep + 1, data)
+			}
 	}
 }
