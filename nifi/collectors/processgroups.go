@@ -1,7 +1,9 @@
 package collectors
 
 import (
-	"github.com/msiedlarek/nifi_exporter/nifi/client"
+	"fmt"
+	"container/list"
+	"github.com/chaordic/nifi_exporter/nifi/client"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
@@ -9,6 +11,7 @@ const rootProcessGroupID = "root"
 
 type ProcessGroupsCollector struct {
 	api *client.Client
+	maxDeep int
 
 	bulletin5mCount *prometheus.Desc
 	componentCount  *prometheus.Desc
@@ -30,11 +33,19 @@ type ProcessGroupsCollector struct {
 	activeThreadCount           *prometheus.Desc
 }
 
-func NewProcessGroupsCollector(api *client.Client, labels map[string]string) *ProcessGroupsCollector {
+func NewProcessGroupsCollector(api *client.Client, labels map[string]string, maxDeep int) *ProcessGroupsCollector {
+
+	// Just to avoid overkill configurations
+	if(maxDeep > 5) {
+		maxDeep = 5;
+	}
+
 	prefix := MetricNamePrefix + "pg_"
 	statLabels := []string{"node_id", "group"}
 	return &ProcessGroupsCollector{
 		api: api,
+
+		maxDeep: maxDeep,
 
 		bulletin5mCount: prometheus.NewDesc(
 			prefix+"bulletin_5m_count",
@@ -164,18 +175,33 @@ func (c *ProcessGroupsCollector) Describe(ch chan<- *prometheus.Desc) {
 }
 
 func (c *ProcessGroupsCollector) Collect(ch chan<- prometheus.Metric) {
-	entities, err := c.api.GetProcessGroups(rootProcessGroupID)
-	if err != nil {
-		ch <- prometheus.NewInvalidMetric(c.componentCount, err)
-		return
-	}
+	/*
+		 Basic algorithm explanation:
 
-	for i := range entities {
-		c.collect(ch, &entities[i])
+		 We can't collect metrics following the graph
+		 		"root" > "child 1" > "grandchild 1" > "child 2" (error here since we changed one level back) > ...)
+		 To work properly we must collect entities metrics "level by level"
+		 	  "root" > "child 1"..."child n" > "grandchild 1"..."grandchild n" > ...
+	 */
+
+	// First build the graph including all entities
+	var data = make([]*list.List, c.maxDeep);
+	deepCollect(ch, c, rootProcessGroupID, 0, data)
+
+	// Now we call collect metris level by level
+	level := 1;
+	for i := range data {
+		item := 1;
+		for e := data[i].Front(); e != nil; e = e.Next() {
+			// Must pass a prefix to avoid repeated metrics
+			c.collect(ch, e.Value.(*client.ProcessGroupEntity), fmt.Sprintf("[%02d][%03d] - ", level, item))
+			item++
+		}
+		level++
 	}
 }
 
-func (c *ProcessGroupsCollector) collect(ch chan<- prometheus.Metric, entity *client.ProcessGroupEntity) {
+func (c *ProcessGroupsCollector) collect(ch chan<- prometheus.Metric, entity *client.ProcessGroupEntity, prefix string) {
 	bulletinCount := map[string]int{
 		"INFO":    0,
 		"WARNING": 0,
@@ -184,12 +210,17 @@ func (c *ProcessGroupsCollector) collect(ch chan<- prometheus.Metric, entity *cl
 	for i := range entity.Bulletins {
 		bulletinCount[entity.Bulletins[i].Bulletin.Level]++
 	}
+
+	// Use this "hack" to avoid duplicated metric errors
+	// since different Nifi Process Groups may have the same name
+	prefixedCompName := 	prefix + entity.Component.Name
+
 	for level, count := range bulletinCount {
 		ch <- prometheus.MustNewConstMetric(
 			c.bulletin5mCount,
 			prometheus.GaugeValue,
 			float64(count),
-			entity.Component.Name,
+			prefixedCompName,
 			level,
 		)
 	}
@@ -208,136 +239,164 @@ func (c *ProcessGroupsCollector) collect(ch chan<- prometheus.Metric, entity *cl
 		c.componentCount,
 		prometheus.GaugeValue,
 		float64(entity.RunningCount),
-		entity.Component.Name,
+		prefixedCompName,
 		"running",
 	)
 	ch <- prometheus.MustNewConstMetric(
 		c.componentCount,
 		prometheus.GaugeValue,
 		float64(entity.StoppedCount),
-		entity.Component.Name,
+		prefixedCompName,
 		"stopped",
 	)
 	ch <- prometheus.MustNewConstMetric(
 		c.componentCount,
 		prometheus.GaugeValue,
 		float64(entity.InvalidCount),
-		entity.Component.Name,
+		prefixedCompName,
 		"invalid",
 	)
 	ch <- prometheus.MustNewConstMetric(
 		c.componentCount,
 		prometheus.GaugeValue,
 		float64(entity.DisabledCount),
-		entity.Component.Name,
+		prefixedCompName,
 		"disabled",
 	)
 
 	for nodeID, snapshot := range nodes {
+
+		// Use this "hack" to avoid duplicated metric errors
+		// since different Nifi Process Groups may have the same name
+		prefixedSnapshotName := prefix + snapshot.Name
+
 		ch <- prometheus.MustNewConstMetric(
 			c.inFlowFiles5mCount,
 			prometheus.GaugeValue,
 			float64(snapshot.FlowFilesIn),
 			nodeID,
-			snapshot.Name,
+			prefixedSnapshotName,
 		)
 		ch <- prometheus.MustNewConstMetric(
 			c.inBytes5mCount,
 			prometheus.GaugeValue,
 			float64(snapshot.BytesIn),
 			nodeID,
-			snapshot.Name,
+			prefixedSnapshotName,
 		)
 		ch <- prometheus.MustNewConstMetric(
 			c.queuedFlowFilesCount,
 			prometheus.GaugeValue,
 			float64(snapshot.FlowFilesQueued),
 			nodeID,
-			snapshot.Name,
+			prefixedSnapshotName,
 		)
 		ch <- prometheus.MustNewConstMetric(
 			c.queuedBytes,
 			prometheus.GaugeValue,
 			float64(snapshot.BytesQueued),
 			nodeID,
-			snapshot.Name,
+			prefixedSnapshotName,
 		)
 		ch <- prometheus.MustNewConstMetric(
 			c.readBytes5mCount,
 			prometheus.GaugeValue,
 			float64(snapshot.BytesRead),
 			nodeID,
-			snapshot.Name,
+			prefixedSnapshotName,
 		)
 		ch <- prometheus.MustNewConstMetric(
 			c.writtenBytes5mCount,
 			prometheus.GaugeValue,
 			float64(snapshot.BytesWritten),
 			nodeID,
-			snapshot.Name,
+			prefixedSnapshotName,
 		)
 		ch <- prometheus.MustNewConstMetric(
 			c.outFlowFiles5mCount,
 			prometheus.GaugeValue,
 			float64(snapshot.FlowFilesOut),
 			nodeID,
-			snapshot.Name,
+			prefixedSnapshotName,
 		)
 		ch <- prometheus.MustNewConstMetric(
 			c.outBytes5mCount,
 			prometheus.GaugeValue,
 			float64(snapshot.BytesOut),
 			nodeID,
-			snapshot.Name,
+			prefixedSnapshotName,
 		)
 		ch <- prometheus.MustNewConstMetric(
 			c.transferredFlowFiles5mCount,
 			prometheus.GaugeValue,
 			float64(snapshot.FlowFilesTransferred),
 			nodeID,
-			snapshot.Name,
+			prefixedSnapshotName,
 		)
 		ch <- prometheus.MustNewConstMetric(
 			c.transferredBytes5mCount,
 			prometheus.GaugeValue,
 			float64(snapshot.BytesTransferred),
 			nodeID,
-			snapshot.Name,
+			prefixedSnapshotName,
 		)
 		ch <- prometheus.MustNewConstMetric(
 			c.receivedBytes5mCount,
 			prometheus.GaugeValue,
 			float64(snapshot.BytesReceived),
 			nodeID,
-			snapshot.Name,
+			prefixedSnapshotName,
 		)
 		ch <- prometheus.MustNewConstMetric(
 			c.receivedFlowFiles5mCount,
 			prometheus.GaugeValue,
 			float64(snapshot.FlowFilesReceived),
 			nodeID,
-			snapshot.Name,
+			prefixedSnapshotName,
 		)
 		ch <- prometheus.MustNewConstMetric(
 			c.sentBytes5mCount,
 			prometheus.GaugeValue,
 			float64(snapshot.BytesSent),
 			nodeID,
-			snapshot.Name,
+			prefixedSnapshotName,
 		)
 		ch <- prometheus.MustNewConstMetric(
 			c.sentFlowFiles5mCount,
 			prometheus.GaugeValue,
 			float64(snapshot.FlowFilesSent),
 			nodeID,
-			snapshot.Name,
+			prefixedSnapshotName,
 		)
 		ch <- prometheus.MustNewConstMetric(
 			c.activeThreadCount,
 			prometheus.GaugeValue,
 			float64(snapshot.ActiveThreadCount),
 			nodeID,
-			snapshot.Name,
+			prefixedSnapshotName,
 		)
+	}
+}
+
+func deepCollect(ch chan<- prometheus.Metric, c *ProcessGroupsCollector, parent string, deep int, data []*list.List) {
+	// Check stop condition
+	if deep < len(data) {
+		entities, err := c.api.GetProcessGroups(parent)
+		if err != nil {
+			ch <- prometheus.NewInvalidMetric(c.componentCount, err)
+			return;
+		}
+
+			// Deep level list
+			if(data[deep] == nil) {
+				data[deep] = list.New()
+			}
+
+			// Deep level entries
+			for i := range entities {
+					data[deep].PushBack(&entities[i])
+					// Deel level loop
+					deepCollect(ch, c, entities[i].Component.ID, deep + 1, data)
+			}
 	}
 }

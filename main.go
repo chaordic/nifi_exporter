@@ -11,8 +11,8 @@ import (
 	"github.com/go-playground/locales/en"
 	"github.com/go-playground/universal-translator"
 	"github.com/juju/errors"
-	"github.com/msiedlarek/nifi_exporter/nifi/client"
-	"github.com/msiedlarek/nifi_exporter/nifi/collectors"
+	"github.com/chaordic/nifi_exporter/nifi/client"
+	"github.com/chaordic/nifi_exporter/nifi/collectors"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	log "github.com/sirupsen/logrus"
@@ -30,6 +30,7 @@ type Configuration struct {
 		CACertificates string            `yaml:"caCertificates"`
 		Username       string            `yaml:"username" validate:"required"`
 		Password       string            `yaml:"password" validate:"required"`
+		MaxDeep				 int							  `yaml:"maxDeep" validate:"required"`
 		Labels         map[string]string `yaml:"labels"`
 	} `yaml:"nodes" validate:"required,dive"`
 }
@@ -114,7 +115,7 @@ func start(config *Configuration) error {
 		if err := prometheus.DefaultRegisterer.Register(collectors.NewCountersCollector(api, node.Labels)); err != nil {
 			return errors.Annotate(err, "Couldn't register counters collector.")
 		}
-		if err := prometheus.DefaultRegisterer.Register(collectors.NewProcessGroupsCollector(api, node.Labels)); err != nil {
+		if err := prometheus.DefaultRegisterer.Register(collectors.NewProcessGroupsCollector(api, node.Labels, node.MaxDeep)); err != nil {
 			return errors.Annotate(err, "Couldn't register process groups collector.")
 		}
 	}
